@@ -55,7 +55,8 @@ class InputError(ValueError):
 
 # ---------------------------------------------------------------- coordinates
 _NUM = r"[-+]?\d{1,3}(?:\.\d+)?"
-_DECIMAL_RE = re.compile(rf"({_NUM})\s*[,;\s]\s*({_NUM})")
+_DEC = r"[-+]?\d{1,3}\.\d+"
+_DECIMAL_RE = re.compile(rf"(?<![\d.])({_DEC})\s*[,;\s]\s*({_DEC})(?![\d.])")
 _DMS_PART = r"([NSEW])?\s*(\d{1,3})\s*°\s*(?:(\d{1,2})\s*['′]\s*)?(?:(\d{1,2}(?:\.\d+)?)\s*(?:\"|″|''))?\s*([NSEW])?"
 _DMS_RE = re.compile(rf"{_DMS_PART}\s*[,;\s]\s*{_DMS_PART}", re.I)
 
@@ -77,11 +78,7 @@ def find_coords(text: str) -> tuple[float, float, str] | None:
         lat, lon = (b, a) if ha in ("E", "W") or hb in ("N", "S") else (a, b)
         return lat, lon, text[: m.start()] + text[m.end():]
     for m in _DECIMAL_RE.finditer(text):
-        a, b = m.group(1), m.group(2)
-        # require decimals so "10452" or "11:14" are not taken as coordinates
-        if "." not in a or "." not in b:
-            continue
-        lat, lon = float(a), float(b)
+        lat, lon = float(m.group(1)), float(m.group(2))
         if -90 <= lat <= 90 and -180 <= lon <= 180:
             return lat, lon, text[: m.start()] + text[m.end():]
     return None
@@ -108,6 +105,7 @@ def _address_lines(addr: dict, display_name: str = "") -> list[str]:
     road = addr.get("road") or addr.get("pedestrian") or addr.get("highway") or ""
     if (addr.get("country_code") or "").lower() in ("us", "ca"):
         road = abbreviate_street(road)
+        road = re.sub(r"^(I|US) (\d+)", r"\1-\2", road)   # "I 77" -> "I-77"
     if road and addr.get("house_number"):
         road = f"{addr['house_number']} {road}"
     line1 = road or addr.get("neighbourhood") or addr.get("suburb") or ""
@@ -210,6 +208,11 @@ def build_stamp(text: str) -> Stamp:
         lines = [f"Network:{format_time(dt)}", f"Local:{format_time(dt)}", to_dms(lat, lon), *address]
         return Stamp(lines, tz.key)
 
+    if re.search(r"[-+]?\d+\.\d+\s*[,;]\s*[-+]?\d{4,}\b|[-+]?\d{4,}\s*[,;]\s*[-+]?\d+\.\d+", joined):
+        raise InputError(
+            "The coordinates look incomplete (missing decimal point?). "
+            "Example: 35.779173, -80.863518"
+        )
     if len(raw_lines) < 2:
         raise InputError(
             "Send the time on the first line and the address (or coordinates) on the next line."
